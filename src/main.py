@@ -9,12 +9,26 @@ DBusGMainLoop(set_as_default=True)
 objpath = "/runner"
 iface = "org.kde.krunner1"
 
+
 class Runner(dbus.service.Object):
     def reload_steam_library(self):
-        import os, re
+        import os
+        import re
         from blacklist import appid_blacklist
         from deserializer import steam_deserialize
+        from extract import extract_last
         from os.path import exists as path_exists
+
+        log_path = self.steam_root + "/logs/connection_log.txt"
+        accountid = extract_last(log_path, r"steamid:\s\[U:1:(\d+)\]")
+
+        config_path = (
+            self.steam_root + "/userdata/" + accountid + "/config/localconfig.vdf"
+        )
+        pattern = r"\"PrivateApps_" + accountid + r"\"\t\t\"\[(((\d+,)+)(\d+))\]\""
+        private_apps = extract_last(config_path, pattern)
+        private_apps = private_apps.split(",")
+        private_apps = set(private_apps)
 
         self.steam_library = {}
         libraryfolders = steam_deserialize(self.libraryfolders_path)
@@ -24,20 +38,34 @@ class Runner(dbus.service.Object):
             library_root = libraryfolders[str(library_index)]["path"]
 
             for appid in libraryfolders[str(library_index)]["apps"]:
-                app_manifest_path = library_root + "/steamapps/appmanifest_" + appid + ".acf"
+                app_manifest_path = (
+                    library_root + "/steamapps/appmanifest_" + appid + ".acf"
+                )
                 if path_exists(app_manifest_path) and (appid not in appid_blacklist):
                     app_manifest = steam_deserialize(app_manifest_path)
-                    app_local_files = library_root + "/steamapps/common/" + app_manifest["installdir"]
+                    app_local_files = (
+                        library_root + "/steamapps/common/" + app_manifest["installdir"]
+                    )
 
                     app_icon_path = ""
-                    app_icon_cache_path = self.steam_root + "/appcache/librarycache/" + appid
+                    app_icon_cache_path = (
+                        self.steam_root + "/appcache/librarycache/" + appid
+                    )
                     if path_exists(app_icon_cache_path):
-                        app_icon_path = ([(app_icon_cache_path + "/" + path) for path in os.listdir(app_icon_cache_path) if re.match(r"[a-z0-9]{40}.jpg", path)] or [""])[0]
+                        app_icon_path = (
+                            [
+                                (app_icon_cache_path + "/" + path)
+                                for path in os.listdir(app_icon_cache_path)
+                                if re.match(r"[a-z0-9]{40}.jpg", path)
+                            ]
+                            or [""]
+                        )[0]
 
                     self.steam_library[app_manifest["appid"]] = {
                         "name": app_manifest["name"],
                         "icon": app_icon_path,
                         "local-files": app_local_files,
+                        "private": app_manifest["appid"] in private_apps,
                     }
             library_index += 1
 
@@ -50,30 +78,47 @@ class Runner(dbus.service.Object):
         self.libraryfolders_path = self.steam_root + "/steamapps/libraryfolders.vdf"
         self.reload_steam_library()
 
-        dbus.service.Object.__init__(self, dbus.service.BusName("com.github.xtibor.krunnersteam", dbus.SessionBus()), objpath)
+        dbus.service.Object.__init__(
+            self,
+            dbus.service.BusName("com.github.xtibor.krunnersteam", dbus.SessionBus()),
+            objpath,
+        )
         # TODO: inotify libraryfolders.vdf -> reload_steam_library
 
-    @dbus.service.method(iface, in_signature='s', out_signature='a(sssida{sv})')
-    def Match(self, query: str):
+    @dbus.service.method(iface, in_signature="s", out_signature="a(sssida{sv})")
+    def Match(self, full_query: str):
         results = []
+        private_keyword = "private:"
+        query = full_query.replace(private_keyword, "")
+        query = query.lstrip()
 
         for appid, properties in self.steam_library.items():
             if query.lower() in properties["name"].lower():
-                results.append((appid, properties["name"], properties["icon"], 100, 1.0, {}))
+                if properties["private"] == ("private:" in full_query.lower()):
+                    results.append(
+                        (
+                            appid,
+                            properties["name"],
+                            properties["icon"],
+                            100,
+                            1.0,
+                            {},
+                        )
+                    )
 
-        results.sort(key = lambda result: result[1].lower())
+        results.sort(key=lambda result: result[1].lower())
 
         return results
 
-    @dbus.service.method(iface, out_signature='a(sss)')
+    @dbus.service.method(iface, out_signature="a(sss)")
     def Actions(self):
         return [
-            ("library",       "Steam Library", "folder-games-symbolic"),
-            ("community-hub", "Community Hub", "system-users"         ),
-            ("local-files",   "Local Files",   "folder"               ),
+            ("library", "Steam Library", "folder-games-symbolic"),
+            ("community-hub", "Community Hub", "system-users"),
+            ("local-files", "Local Files", "folder"),
         ]
 
-    @dbus.service.method(iface, in_signature='ss')
+    @dbus.service.method(iface, in_signature="ss")
     def Run(self, appid: str, action: str):
         import subprocess
 
@@ -87,6 +132,7 @@ class Runner(dbus.service.Object):
             subprocess.Popen(["xdg-open", "steam://url/SteamWorkshopPage/" + appid])
         elif action == "local-files":
             subprocess.Popen(["xdg-open", self.steam_library[appid]["local-files"]])
+
 
 runner = Runner()
 loop = GLib.MainLoop()
