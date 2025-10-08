@@ -21,13 +21,19 @@ class Runner(dbus.service.Object):
 
         log_path = self.steam_root + "/logs/connection_log.txt"
         accountid = extract_last(log_path, r"steamid:\s\[U:1:(\d+)\]")
+        
+        if not accountid:
+            accountid = ""
 
         config_path = (
             self.steam_root + "/userdata/" + accountid + "/config/localconfig.vdf"
         )
         pattern = r"\"PrivateApps_" + accountid + r"\"\t\t\"\[(((\d+,)+)(\d+))\]\""
         private_apps = extract_last(config_path, pattern)
-        private_apps = private_apps.split(",")
+        if private_apps:
+            private_apps = private_apps.split(",")
+        else:
+            private_apps = []
         private_apps = set(private_apps)
 
         self.steam_library = {}
@@ -122,14 +128,17 @@ class Runner(dbus.service.Object):
     def Run(self, appid: str, action: str):
         import subprocess
 
+        # Use flatpak Steam for launching games
+        steam_cmd = ["flatpak", "run", "com.valvesoftware.Steam"]
+
         # https://developer.valvesoftware.com/wiki/Steam_browser_protocol
         # https://developer.valvesoftware.com/wiki/Command_line_options#Steam
         if action == "":
-            subprocess.Popen(["xdg-open", "steam://rungameid/" + appid])
+            subprocess.Popen(steam_cmd + ["steam://rungameid/" + appid])
         elif action == "library":
-            subprocess.Popen(["xdg-open", "steam://nav/games/details/" + appid])
+            subprocess.Popen(steam_cmd + ["steam://nav/games/details/" + appid])
         elif action == "community-hub":
-            subprocess.Popen(["xdg-open", "steam://url/SteamWorkshopPage/" + appid])
+            subprocess.Popen(steam_cmd + ["steam://url/SteamWorkshopPage/" + appid])
         elif action == "local-files":
             subprocess.Popen(["xdg-open", self.steam_library[appid]["local-files"]])
 
