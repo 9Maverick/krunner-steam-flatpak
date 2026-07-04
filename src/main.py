@@ -1,6 +1,7 @@
 #!/usr/bin/python3
 
 import dbus.service
+import subprocess
 from dbus.mainloop.glib import DBusGMainLoop
 from gi.repository import GLib
 
@@ -8,6 +9,19 @@ DBusGMainLoop(set_as_default=True)
 
 objpath = "/runner"
 iface = "org.kde.krunner1"
+
+
+def is_steam_flatpak():
+    result = subprocess.run(
+        ["flatpak", "list", "--app", "--columns=application"],
+        capture_output=True,
+        text=True,
+    )
+    flatpak = "com.valvesoftware.Steam" in result.stdout.split()
+    return flatpak
+
+
+is_flatpak = is_steam_flatpak()
 
 
 class Runner(dbus.service.Object):
@@ -21,7 +35,7 @@ class Runner(dbus.service.Object):
 
         log_path = self.steam_root + "/logs/connection_log.txt"
         accountid = extract_last(log_path, r"steamid:\s\[U:1:(\d+)\]")
-        
+
         if not accountid:
             accountid = ""
 
@@ -78,9 +92,11 @@ class Runner(dbus.service.Object):
     def __init__(self):
         import os
 
-        self.steam_root = os.path.expanduser(
-            "~/.var/app/com.valvesoftware.Steam/.local/share/Steam"
-        )
+        root_path = "~/.local/share/Steam"
+        if is_flatpak:
+            root_path = "~/.var/app/com.valvesoftware.Steam/.local/share/Steam"
+
+        self.steam_root = os.path.expanduser(root_path)
         self.libraryfolders_path = self.steam_root + "/steamapps/libraryfolders.vdf"
         self.reload_steam_library()
 
@@ -128,8 +144,10 @@ class Runner(dbus.service.Object):
     def Run(self, appid: str, action: str):
         import subprocess
 
-        # Use flatpak Steam for launching games
-        steam_cmd = ["flatpak", "run", "com.valvesoftware.Steam"]
+        steam_cmd = ["steam"]
+        if is_flatpak:
+            # Use flatpak Steam for launching games
+            steam_cmd = ["flatpak", "run", "com.valvesoftware.Steam"]
 
         # https://developer.valvesoftware.com/wiki/Steam_browser_protocol
         # https://developer.valvesoftware.com/wiki/Command_line_options#Steam
